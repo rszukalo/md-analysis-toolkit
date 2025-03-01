@@ -1,4 +1,3 @@
-cat > README.md << 'EOL'
 # MD Analysis Toolkit
 
 A toolkit for analyzing molecular dynamics trajectories with standardized coordinate handling and efficient analysis tools.
