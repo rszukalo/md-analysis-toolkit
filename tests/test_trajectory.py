@@ -117,6 +117,47 @@ class TestLAMMPSTrajectory(unittest.TestCase):
             if os.path.exists(triclinic_file):
                 os.remove(triclinic_file)
 
+    def test_get_frame(self):
+        """Test get_frame method."""
+        traj = LAMMPSTrajectory(self.temp_file)
+        
+        # Get first frame
+        frame0 = traj.get_frame(0)
+        
+        for col in ['id', 'type', 'x', 'y', 'z', 'vx', 'vy', 'vz']:
+            self.assertIn(col, frame0)
+        
+        np.testing.assert_array_equal(frame0['id'], [1, 2, 3, 4])
+        np.testing.assert_array_equal(frame0['type'], [1, 1, 2, 2])
+        np.testing.assert_array_equal(frame0['x'], [1.0, 4.0, 7.0, 10.0])
+        
+        # Get second frame
+        frame1 = traj.get_frame(1)
+        
+        np.testing.assert_array_equal(frame1['x'], [1.1, 4.1, 7.1, 10.1])
+    
+    def test_frame_cache(self):
+        """Test the frame caching mechanism."""
+        traj = LAMMPSTrajectory(self.temp_file, cache_size=1)
+        
+        # Get first frame - should be cached
+        frame0 = traj.get_frame(0)
+        self.assertIn(0, traj._cache)
+        
+        # Get second frame - should replace first frame in cache
+        frame1 = traj.get_frame(1)
+        self.assertIn(1, traj._cache)
+        self.assertNotIn(0, traj._cache)  # First frame should be evicted
+        
+        # Get first frame again - should reload from file
+        frame0_again = traj.get_frame(0)
+        self.assertIn(0, traj._cache)
+        self.assertNotIn(1, traj._cache)  # Second frame should be evicted
+        
+        # Verify data is the same
+        np.testing.assert_array_equal(frame0['x'], frame0_again['x'])
+
+
 
 if __name__ == '__main__':
     unittest.main()
