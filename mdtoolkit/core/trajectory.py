@@ -78,10 +78,16 @@ class LAMMPSTrajectory:
                         self.n_atoms = int(n_atoms_line)
                     
                     # Read box bounds
-                    f.readline()  # ITEM: BOX BOUNDS
-                    x_bounds = list(map(float, f.readline().strip().split()))
-                    y_bounds = list(map(float, f.readline().strip().split()))
-                    z_bounds = list(map(float, f.readline().strip().split()))
+                    box_header = f.readline() # ITEM: BOX BOUNDS [optional tilt factors] [boundary types]
+
+                    x_bounds_line = f.readline().strip().split()
+                    y_bounds_line = f.readline().strip().split()
+                    z_bounds_line = f.readline().strip().split()
+
+                    x_bounds = [float(x_bounds_line[0]), float(x_bounds_line[1])]
+                    y_bounds = [float(y_bounds_line[0]), float(y_bounds_line[1])]
+                    z_bounds = [float(z_bounds_line[0]), float(z_bounds_line[1])]
+                    
                     box_dims.append([x_bounds, y_bounds, z_bounds])
                     
                     # Get column names from the first frame
