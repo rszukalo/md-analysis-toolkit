@@ -127,7 +127,7 @@ class LAMMPSTrajectory:
         if frame_idx < 0 or frame_idx >= self.n_frames:
             raise IndexError(f"Frame index {frame_idx} out of range (0-{self.n_frames-1})")
         
-        # Check if frame is in cache
+        # Check if frame is in cache, if frame is already in cache - then returns frame from here rather than reading from the file
         if frame_idx in self._cache:
             return self._cache[frame_idx]
         
@@ -155,6 +155,7 @@ class LAMMPSTrajectory:
 
     def _update_cache(self, frame_idx: int, frame_data: Dict[str, np.ndarray]) -> None:
         """
+        Cache system is designed to store recently accessed frames in memory - this will help will data analysis that requires multiple frames
         Update the frame cache with a new frame.
         
         Args:
