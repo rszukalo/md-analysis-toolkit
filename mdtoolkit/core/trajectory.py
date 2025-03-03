@@ -161,13 +161,17 @@ class LAMMPSTrajectory:
             frame_idx (int): Index of the frame
             frame_data (Dict[str, np.ndarray]): Frame data
         """
+
         # Add to cache
         self._cache[frame_idx] = frame_data
         
         # Remove oldest frame if cache is full
         if len(self._cache) > self._cache_size:
-            oldest_key = min(self._cache.keys())
-            del self._cache[oldest_key]
+            # Get the oldest key that's not the current frame_idx
+            keys_to_consider = [k for k in self._cache.keys() if k != frame_idx]
+            if keys_to_consider:
+                oldest_key = min(keys_to_consider)
+                del self._cache[oldest_key]
     
     def iterate_frames(self, start: int = 0, end: Optional[int] = None, step: int = 1) -> Iterator[Tuple[int, Dict[str, np.ndarray]]]:
         """
