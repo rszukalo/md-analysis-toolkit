@@ -1,11 +1,36 @@
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union, Any, Callable
 
+from mdtoolkit.core.utils import minimum_image_distance, extract_box_lengths
+
+def calculate_rdf_bin_properties(max_distance: float, n_bins: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculate properties for RDF bins.
+    
+    Args:
+        max_distance (float): Maximum distance for RDF calculation
+        n_bins (int): Number of distance bins
+        
+    Returns:
+        Tuple containing:
+            bin_edges (np.ndarray): Edges of bins, shape (n_bins+1,)
+            bin_widths (np.ndarray): Width of each bin, shape (n_bins,)
+            bin_centers (np.ndarray): Centers of bins, shape (n_bins,)
+            bin_volumes (np.ndarray): Volumes of spherical shells, shape (n_bins,)
+    """
+
+    bin_edges = np.linspace(0, max_distance, n_bins + 1)
+    bin_widths = bin_edges[1:] - bin_edges[:-1]
+    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+    bin_volumes = 4 * np.pi * bin_centers**2 * bin_widths
+    
+    return bin_edges, bin_widths, bin_centers, bin_volumes
+
 def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: int = 1, type_b: Optional[int] = None, normalize: bool = True) -> Callable:
     """
     Create an RDF analyzer function for use with LAMMPSTrajectory.analyze_trajectory.
     
-    This factory function creates an analysis function that calculates the radial
+    This function creates an analysis function that calculates the radial
     distribution function (RDF) between atoms of type_a and type_b. The function
     maintains internal state to accumulate histogram data across all frames.
     
@@ -48,10 +73,7 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
     if type_b is None:
         type_b = type_a
 
-    bin_edges = np.linspace(0, max_distance, n_bins + 1)
-    bin_widths = bin_edges[1:] - bin_edges[:-1]
-    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-    bin_volumes = 4 * np.pi * bin_centers**2 * bin_widths
+    bin_edges, bin_widths, bin_centers, bin_volumes = calculate_rdf_bin_properties(max_distance, n_bins)
 
     # State variable - these will be maintained throughout all frames
     histogram = np.zeros(n_bins)
@@ -61,7 +83,6 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
     total_num_type_b = 0
     total_volume = 0.0
 
-    # Fucntion which will be called each frame
     def analyze_frame(frame: Dict[str, np.ndarray], box_dims: np.ndarray, timestep: float, **kwargs) -> Dict[str, Any]:
         """
         Analyze a single frame to update the RDF calculation.
@@ -84,28 +105,17 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
         num_type_a = np.sum(mask_type_a)
         num_type_b = np.sum(mask_type_b)
 
-        # Skip if no atoms of the required types
-        ## Unsure why this is here - I think it is a check to see if the types exist or not, but that is more of an error check.  
-        ### If they don't exist, the analysis should exit and an error message should be printed
-        if num_type_a == 0 or num_type_b == 0:
-            return {
-                'timestep': timestep,
-                'frame_histogram': np.zeros(n_bins),
-                'num_type_a': 0,
-                'num_type_b': 0,
-                'skipped': True
-            }
+        if num_type_a == 0:
+            raise ValueError(f"Frame at timestep {timestep} contains no atoms of type {type_a}")
+        if num_type_b == 0:
+            raise ValueError(f"Frame at timestep {timestep} contains no atoms of type {type_b}")
         
         pos_a = np.column_stack([frame['x'][mask_type_a], frame['y'][mask_type_a], frame['z'][mask_type_a]])
         pos_b = np.column_stack([frame['x'][mask_type_b], frame['y'][mask_type_b], frame['z'][mask_type_b]])
 
-        box_size = np.array([
-            box_dims[0][1] - box_dims[0][0],
-            box_dims[1][1] - box_dims[1][0],
-            box_dims[2][1] - box_dims[2][0]
-        ])
-        
-        box_volume = np.prod(box_size)
+        box_lengths = extract_box_lengths(box_dims)
+        box_volume = np.prod(box_lengths)
+
         frame_hist = np.zeros(n_bins)
 
         self_rdf = type_a == type_b
@@ -123,16 +133,7 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
 
                 diff = pos_i - pos_b[j]
 
-                # Minimimum Image convention
-                ## Not a very good implementation of this, cannot handle cases for which particles are more than one periodic image away
-                ### Want to standardize this in some core functionality functions - no need to duplicate periodic distances every analysis code
-                for dim in range(3):
-                    if diff[dim] > 0.5 * box_size[dim]:
-                        diff[dim] -= box_size[dim]
-                    elif diff[dim] < -0.5 * box_size[dim]:
-                        diff[dim] += box_size[dim]
-
-                distance = np.sqrt(np.sum(diff**2))
+                distance = minimum_image_distance(pos_i, pos_b[j], box_lengths)
 
                 if distance < max_distance:
                     bin_idx = int(distance / max_distance * n_bins)
@@ -166,21 +167,17 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
         avg_n_b = total_num_type_b / n_frames
         avg_volume = total_volume / n_frames
         
-        # Copy the histogram to avoid modifying the internal state
         hist_copy = histogram.copy()
         
         if normalize:
-            # Calculate proper normalization factors
             if type_a == type_b:
-                normalization = avg_n_a * (avg_n_a - 1) / 2  # This is correct
+                normalization = avg_n_a * (avg_n_a - 1) / 2  
                 density = avg_n_a / avg_volume
             else:
-                normalization = avg_n_a * avg_n_b  # This is correct
-                density = avg_n_b / avg_volume  # Density of type_b particles
+                normalization = avg_n_a * avg_n_b  
+                density = avg_n_b / avg_volume  
             
-            # Avoid division by zero
             if normalization > 0:
-                # Classical RDF normalization formula:
                 # g(r) = hist(r) * V / (N_A * N_B * dV(r) * n_frames)
                 density = normalization / avg_volume
                 for i in range(n_bins):
@@ -189,11 +186,9 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
         
         return bin_centers, hist_copy
     
-    # Attach the get_rdf method to the analyzer function
     analyze_frame.get_rdf = get_rdf
     
     return analyze_frame
-
 
 def process_rdf_results(results: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -208,6 +203,7 @@ def process_rdf_results(results: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.n
     Returns:
         Tuple[np.ndarray, np.ndarray]: (distances, rdf_values)
     """
+
     if not results:
         raise ValueError("No results to process")
     
@@ -223,37 +219,29 @@ def process_rdf_results(results: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.n
     total_hist = np.zeros(n_bins)
     n_frames = len(results)
     
-    # Sum histograms
     for result in results:
         if not result.get('skipped', False):
             total_hist += result['frame_histogram']
     
-    # Collect statistics needed for normalization
     total_n_a = sum(result.get('num_type_a', 0) for result in results)
     total_n_b = sum(result.get('num_type_b', 0) for result in results)
     total_volume = sum(result.get('bpx_volume', 0) for result in results)
     
-    # Calculate average statistics
     avg_n_a = total_n_a / n_frames if n_frames > 0 else 0
     avg_n_b = total_n_b / n_frames if n_frames > 0 else 0
     avg_volume = total_volume / n_frames if n_frames > 0 else 0
     
-    # Determine if same type
     same_type = results[0].get('num_type_a', 0) == results[0].get('num_type_b', 0)
     
-    # Normalization factor
     if same_type:
         normalization = avg_n_a * (avg_n_a - 1) / 2
     else:
         normalization = avg_n_a * avg_n_b
     
-    # Bin volumes for normalization
-    max_distance = results[0].get('max_distance', bin_centers[-1] * 2)
-    bin_width = max_distance / n_bins
-    bin_edges = np.linspace(0, max_distance, n_bins + 1)
-    bin_volumes = (4/3) * np.pi * (bin_edges[1:]**3 - bin_edges[:-1]**3)
-    
-    # Normalize to get RDF
+    max_distance = bin_centers[-1] * 2  
+    bin_properties = calculate_rdf_bin_properties(max_distance, n_bins)
+    bin_volumes = bin_properties[3]  
+
     rdf = np.zeros_like(total_hist)
     if normalization > 0:
         density = normalization / avg_volume
