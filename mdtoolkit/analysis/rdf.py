@@ -75,7 +75,7 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
 
     bin_edges, bin_widths, bin_centers, bin_volumes = calculate_rdf_bin_properties(max_distance, n_bins)
 
-    # State variable - these will be maintained throughout all frames
+    # State variables - these will be maintained throughout all frames
     histogram = np.zeros(n_bins)
     n_frames = 0
 
@@ -131,8 +131,6 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
                 if self_rdf and i == j:
                     continue
 
-                diff = pos_i - pos_b[j]
-
                 distance = minimum_image_distance(pos_i, pos_b[j], box_lengths)
 
                 if distance < max_distance:
@@ -154,7 +152,7 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
             'frame_histogram': frame_hist,
             'num_type_a': num_type_a,
             'num_type_b': num_type_b,
-            'box volume': box_volume,
+            'box_volume': box_volume,  # Fixed key name: was 'box volume' with a space
             'bin_centers': bin_centers,
         }
     
@@ -166,6 +164,10 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
         avg_n_a = total_num_type_a / n_frames
         avg_n_b = total_num_type_b / n_frames
         avg_volume = total_volume / n_frames
+        
+        # Calculate number density for later use in coordination number calculations
+        # Use number density of type_b particles
+        number_density = avg_n_b / avg_volume
         
         hist_copy = histogram.copy()
         
@@ -183,10 +185,40 @@ def create_rdf_analyzer(max_distance: float = 10.0, n_bins: int = 100, type_a: i
                 for i in range(n_bins):
                         if bin_volumes[i] > 0:
                             hist_copy[i] = hist_copy[i] * avg_volume / (n_frames * normalization * bin_volumes[i])
+
+        # Store calculation parameters in the function for metadata access
+        get_rdf.metadata = {
+            'type_a': type_a,
+            'type_b': type_b,
+            'max_distance': max_distance,
+            'n_bins': n_bins,
+            'normalize': normalize,
+            'n_frames': n_frames,
+            'avg_n_a': avg_n_a,
+            'avg_n_b': avg_n_b,
+            'avg_volume': avg_volume,
+            'number_density': number_density  # Number density of type_b particles
+        }
         
         return bin_centers, hist_copy
     
+    # Add method to create RDFResult directly - MOVED HERE FROM THE BOTTOM
+    def get_rdf_result(metadata=None):
+        """Create an RDFResult object from this analyzer's data"""
+        from mdtoolkit.output.output_rdf import RDFResult
+        
+        distances, rdf_values = get_rdf()
+        
+        # Combine metadata from the analyzer with any provided metadata
+        combined_metadata = get_rdf.metadata.copy() if hasattr(get_rdf, 'metadata') else {}
+        if metadata:
+            combined_metadata.update(metadata)
+            
+        return RDFResult(distances, rdf_values, combined_metadata)
+    
+    # Attach both methods to the analyzer function
     analyze_frame.get_rdf = get_rdf
+    analyze_frame.get_rdf_result = get_rdf_result
     
     return analyze_frame
 
@@ -225,7 +257,7 @@ def process_rdf_results(results: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.n
     
     total_n_a = sum(result.get('num_type_a', 0) for result in results)
     total_n_b = sum(result.get('num_type_b', 0) for result in results)
-    total_volume = sum(result.get('bpx_volume', 0) for result in results)
+    total_volume = sum(result.get('box_volume', 0) for result in results)  # Fixed key name
     
     avg_n_a = total_n_a / n_frames if n_frames > 0 else 0
     avg_n_b = total_n_b / n_frames if n_frames > 0 else 0
